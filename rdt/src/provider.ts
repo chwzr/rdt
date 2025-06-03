@@ -14,31 +14,31 @@ import {
 } from "./types";
 import { RdtConnection } from "./connection";
 
-export interface RdtStore {
-  data: DocumentMap;
+export interface RdtStore<T = JsonValue> {
+  data: DocumentMap<T>;
   isLoading: boolean;
   error: string | null;
-  get: (key: string) => JsonValue | undefined;
-  set: (key: string, value: JsonValue) => void;
+  get: (key: string) => T | undefined;
+  set: (key: string, value: T) => void;
   delete: (key: string) => void;
   has: (key: string) => boolean;
   keys: () => string[];
-  values: () => JsonValue[];
-  entries: () => [string, JsonValue][];
+  values: () => T[];
+  entries: () => [string, T][];
   size: () => number;
   clear: () => void;
-  getState: () => RdtStoreState;
-  setState: (partial: Partial<RdtStoreState>) => void;
-  subscribe: (listener: (state: RdtStoreState) => void) => () => void;
+  getState: () => RdtStoreState<T>;
+  setState: (partial: Partial<RdtStoreState<T>>) => void;
+  subscribe: (listener: (state: RdtStoreState<T>) => void) => () => void;
 }
 
-interface RdtStoreState {
-  data: DocumentMap;
+interface RdtStoreState<T = JsonValue> {
+  data: DocumentMap<T>;
   isLoading: boolean;
   error: string | null;
 }
 
-export class RdtProvider {
+export class RdtProvider<T = JsonValue> {
   private connection: RdtConnection;
   private config: RdtProviderConfig;
   private store: any;
@@ -49,7 +49,7 @@ export class RdtProvider {
     this.config = config;
     this.subscriptionKey = `${config.documentId}:${config.mapKey}`;
 
-    this.store = create<RdtStoreState>()(
+    this.store = create<RdtStoreState<T>>()(
       subscribeWithSelector((set, get) => ({
         data: {},
         isLoading: true,
@@ -64,13 +64,13 @@ export class RdtProvider {
   /**
    * Get the Zustand store with enhanced API
    */
-  getStore(): RdtStore {
+  getStore(): RdtStore<T> {
     const store = this.store;
 
     return {
       ...store,
       get: (key: string) => store.getState().data[key],
-      set: (key: string, value: JsonValue) => {
+      set: (key: string, value: T) => {
         // Note: This is read-only from client perspective
         // All mutations should come from the server
         console.warn(
@@ -98,7 +98,7 @@ export class RdtProvider {
   /**
    * Subscribe to store changes
    */
-  subscribe(listener: (state: RdtStoreState) => void): () => void {
+  subscribe(listener: (state: RdtStoreState<T>) => void): () => void {
     return this.store.subscribe(listener);
   }
 
@@ -107,10 +107,10 @@ export class RdtProvider {
    */
   subscribeToKey(
     key: string,
-    listener: (value: JsonValue | undefined) => void,
+    listener: (value: T | undefined) => void,
   ): () => void {
     return this.store.subscribe(
-      (state: RdtStoreState) => state.data[key],
+      (state: RdtStoreState<T>) => state.data[key],
       listener,
     );
   }
@@ -129,19 +129,19 @@ export class RdtProvider {
   private setupEventListeners(): void {
     this.connection.on("fullState", (message: FullStateMessage) => {
       if (this.isMessageForThisProvider(message.document_id, message.map_key)) {
-        this.handleFullState(message);
+        this.handleFullState(message as FullStateMessage<T>);
       }
     });
 
     this.connection.on("mapChange", (message: MapChangeMessage) => {
       if (this.isMessageForThisProvider(message.document_id, message.map_key)) {
-        this.handleMapChange(message);
+        this.handleMapChange(message as MapChangeMessage<T>);
       }
     });
 
     this.connection.on("batchMapChange", (message: BatchMapChangeMessage) => {
       if (this.isMessageForThisProvider(message.document_id, message.map_key)) {
-        this.handleBatchMapChange(message);
+        this.handleBatchMapChange(message as BatchMapChangeMessage<T>);
       }
     });
 
@@ -177,7 +177,7 @@ export class RdtProvider {
     }
   }
 
-  private handleFullState(message: FullStateMessage): void {
+  private handleFullState(message: FullStateMessage<T>): void {
     this.store.setState({
       data: message.data,
       isLoading: false,
@@ -185,13 +185,13 @@ export class RdtProvider {
     });
   }
 
-  private handleMapChange(message: MapChangeMessage): void {
-    const change = message.change as ChangeUnion;
+  private handleMapChange(message: MapChangeMessage<T>): void {
+    const change = message.change as ChangeUnion<T>;
     const currentData = this.store.getState().data;
 
     switch (change.op) {
       case "Insert": {
-        const insertChange = change as InsertChange;
+        const insertChange = change as InsertChange<T>;
         this.store.setState({
           data: {
             ...currentData,
@@ -202,7 +202,7 @@ export class RdtProvider {
       }
 
       case "Update": {
-        const updateChange = change as UpdateChange;
+        const updateChange = change as UpdateChange<T>;
         this.store.setState({
           data: {
             ...currentData,
@@ -213,7 +213,7 @@ export class RdtProvider {
       }
 
       case "Remove": {
-        const removeChange = change as RemoveChange;
+        const removeChange = change as RemoveChange<T>;
         const newData = { ...currentData };
         delete newData[removeChange.key];
         this.store.setState({ data: newData });
@@ -222,7 +222,7 @@ export class RdtProvider {
     }
   }
 
-  private handleBatchMapChange(message: BatchMapChangeMessage): void {
+  private handleBatchMapChange(message: BatchMapChangeMessage<T>): void {
     const currentData = this.store.getState().data;
     let newData = { ...currentData };
 
@@ -236,26 +236,26 @@ export class RdtProvider {
   }
 
   private applyChangeToData(
-    data: DocumentMap,
-    change: ChangeUnion,
-  ): DocumentMap {
+    data: DocumentMap<T>,
+    change: ChangeUnion<T>,
+  ): DocumentMap<T> {
     const result = { ...data };
 
     switch (change.op) {
       case "Insert": {
-        const insertChange = change as InsertChange;
+        const insertChange = change as InsertChange<T>;
         result[insertChange.key] = insertChange.value;
         break;
       }
 
       case "Update": {
-        const updateChange = change as UpdateChange;
+        const updateChange = change as UpdateChange<T>;
         result[updateChange.key] = updateChange.new_value;
         break;
       }
 
       case "Remove": {
-        const removeChange = change as RemoveChange;
+        const removeChange = change as RemoveChange<T>;
         delete result[removeChange.key];
         break;
       }
@@ -277,9 +277,9 @@ export class RdtProvider {
 /**
  * Create a new RDT provider
  */
-export function createRdtProvider(
+export function createRdtProvider<T = JsonValue>(
   connection: RdtConnection,
   config: RdtProviderConfig,
-): RdtProvider {
-  return new RdtProvider(connection, config);
+): RdtProvider<T> {
+  return new RdtProvider<T>(connection, config);
 }
