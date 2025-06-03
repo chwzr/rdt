@@ -1,5 +1,5 @@
 {
-  "name": "rdt",
+  "name": "rdtjs",
   "version": "0.1.0",
   "description": "Client library for RDT (Realtime Document Synchronization) framework",
   "type": "module",
