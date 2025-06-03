@@ -9,3 +9,4 @@ authors = ["Felix Koppe <hi@flxkpe.io>"]
 license = "MIT"
 repository = "https://github.com/chwzr/rdt"
 description = "Replicated Data Types - A High Performance Sync Framework"
+readme = "README.md"

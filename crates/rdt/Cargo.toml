@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Replicated Data Types - Single Source of Truth State synchronization framework"
+readme.workspace = true
+description = "Replicated Data Types - A synchronization framework"
+homepage = "https://github.com/chwzr/rdt"
 
 [features]
 default = ["persistence", "axum"]

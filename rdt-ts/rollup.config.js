@@ -15,7 +15,7 @@ const config = [
             resolve(),
             typescript({ tsconfig: './tsconfig.json' })
         ],
-        external: ['zustand', 'lib0']
+        external: ['zustand', 'lib0', 'react']
     },
     // CommonJS build
     {
@@ -29,7 +29,7 @@ const config = [
             resolve(),
             typescript({ tsconfig: './tsconfig.json' })
         ],
-        external: ['zustand', 'lib0']
+        external: ['zustand', 'lib0', 'react']
     },
     // Type definitions
     {
