@@ -211,20 +211,14 @@ export class RdtProvider<T = JsonValue> {
       },
 
       error: (error: Error) => {
-        console.error("Error in RDT provider:", error);
+        // console.error("Error in RDT provider:", error);
         this.store.setState({ error: error.message });
       },
 
       stateChange: (state) => {
         if (state === "connected") {
-          // Re-subscribe when connection is restored
-          this.connection.subscribe(this.config.documentId, this.config.mapKey);
-          if (this.config.options?.initialSync !== false) {
-            this.connection.getFullState(
-              this.config.documentId,
-              this.config.mapKey,
-            );
-          }
+          // Connection handles re-subscription and full state requests automatically
+          // Keep loading state until full state is received
         } else if (state === "disconnected" || state === "error") {
           this.store.setState({ isLoading: true });
         }

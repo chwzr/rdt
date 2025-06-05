@@ -112,6 +112,22 @@ export class RdtClient {
   getConnectionState(): ConnectionState {
     return this.connection.getState();
   }
+
+  /**
+   * Subscribe to connection status changes
+   */
+  onConnectionStatus(callback: (isConnected: boolean) => void): () => void {
+    const handler = (state: ConnectionState) => {
+      callback(state === "connected");
+    };
+
+    this.connection.on("stateChange", handler);
+
+    // Return unsubscribe function
+    return () => {
+      this.connection.off("stateChange", handler);
+    };
+  }
 }
 
 // Default export

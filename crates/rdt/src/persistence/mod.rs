@@ -20,7 +20,7 @@ impl PersistenceManager {
         Self {
             store,
             storage_path: storage_path.into(),
-            check_interval: Duration::from_secs(30), // Default: check every 30 seconds
+            check_interval: Duration::from_secs(10), // Default: check every 10 seconds
             handles: JoinSet::new(),
         }
     }

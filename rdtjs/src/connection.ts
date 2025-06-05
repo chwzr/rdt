@@ -63,6 +63,10 @@ export class RdtConnection {
           this.setState("connected");
           this.reconnectAttempts = 0;
           this.clearReconnectTimer();
+
+          // Re-subscribe to all stored subscriptions on reconnect
+          this.resubscribeAll();
+
           resolve();
         };
 
@@ -83,8 +87,12 @@ export class RdtConnection {
 
         this.ws.onerror = (error) => {
           this.setState("error");
-          const err = new Error(`WebSocket error: ${error}`);
+          console.log("WebSocket connection error:", error);
+          const err = new Error(
+            `WebSocket connection failed - attempting to reconnect...`,
+          );
           this.emit("error", err);
+          this.scheduleReconnect();
           reject(err);
         };
       } catch (error) {
@@ -257,11 +265,54 @@ export class RdtConnection {
     }
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.options.maxReconnectAttempts) {
-      return;
-    }
+  private resubscribeAll(): void {
+    console.log(
+      "Resubscribing to",
+      this.subscriptions.size,
+      "subscriptions after reconnect",
+    );
 
+    this.subscriptions.forEach((subscriptionKey) => {
+      const [documentId, mapKey] = subscriptionKey.split(":");
+      console.log("Resubscribing to", documentId, mapKey);
+      try {
+        this.sendMessage({
+          type: "Subscribe",
+          document_id: documentId,
+          map_key: mapKey,
+        });
+      } catch (error) {
+        console.warn(`Failed to resubscribe to ${subscriptionKey}:`, error);
+      }
+    });
+
+    // Request full state for all subscriptions after a small delay to ensure subscriptions are processed
+    setTimeout(() => {
+      console.log(
+        "Requesting full state for",
+        this.subscriptions.size,
+        "subscriptions",
+      );
+      this.subscriptions.forEach((subscriptionKey) => {
+        const [documentId, mapKey] = subscriptionKey.split(":");
+        console.log("Requesting full state for", documentId, mapKey);
+        try {
+          this.sendMessage({
+            type: "GetFullState",
+            document_id: documentId,
+            map_key: mapKey,
+          });
+        } catch (error) {
+          console.warn(
+            `Failed to request full state for ${subscriptionKey}:`,
+            error,
+          );
+        }
+      });
+    }, 100); // Small delay to ensure subscriptions are processed first
+  }
+
+  private scheduleReconnect(): void {
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectAttempts++;
       this.connect().catch(() => {
