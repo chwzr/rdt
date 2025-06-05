@@ -26,7 +26,12 @@ export {
 } from "./connection";
 
 // Provider
-export { RdtProvider, createRdtProvider, type RdtStore } from "./provider";
+export {
+  RdtProvider,
+  createRdtProvider,
+  type RdtStore,
+  type RdtStoreState,
+} from "./provider";
 
 // Protocol utilities
 export {
@@ -40,12 +45,12 @@ export {
 // Import types for internal use
 import { RdtConnection, ConnectionState } from "./connection";
 import { RdtProvider, createRdtProvider } from "./provider";
-import { RdtConnectionOptions, RdtProviderConfig } from "./types";
+import { RdtConnectionOptions, RdtProviderConfig, JsonValue } from "./types";
 
 // Main class for convenience
 export class RdtClient {
   private connection: RdtConnection;
-  private providers: Map<string, RdtProvider> = new Map();
+  private providers: Map<string, RdtProvider<any>> = new Map();
 
   constructor(options: RdtConnectionOptions) {
     this.connection = new RdtConnection(options);
@@ -63,7 +68,7 @@ export class RdtClient {
    */
   disconnect(): void {
     // Clean up all providers
-    for (const provider of this.providers.values()) {
+    for (const provider of Array.from(this.providers.values())) {
       provider.destroy();
     }
     this.providers.clear();
@@ -74,17 +79,24 @@ export class RdtClient {
   /**
    * Create a provider for a document map
    */
-  createProvider(config: RdtProviderConfig): RdtProvider {
+  createProvider<T = JsonValue>(config: RdtProviderConfig): RdtProvider<T> {
     const key = `${config.documentId}:${config.mapKey}`;
 
     if (this.providers.has(key)) {
-      return this.providers.get(key)!;
+      return this.providers.get(key)! as RdtProvider<T>;
     }
 
-    const provider = createRdtProvider(this.connection, config);
+    const provider = createRdtProvider<T>(this.connection, config);
     this.providers.set(key, provider);
 
     return provider;
+  }
+
+  /**
+   * Get a provider for a document map
+   */
+  getProvider<T = JsonValue>(key: string): RdtProvider<T> {
+    return this.providers.get(key)! as RdtProvider<T>;
   }
 
   /**

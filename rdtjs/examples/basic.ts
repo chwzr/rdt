@@ -3,7 +3,7 @@ import RdtClient from "../src/index";
 async function basicExample() {
   // Create RDT client
   const client = new RdtClient({
-    url: "ws://localhost:8080/ws",
+    url: "ws://localhost:8080/rdt",
     reconnectInterval: 5000,
     maxReconnectAttempts: 10,
   });

@@ -28,7 +28,10 @@ export class RdtConnection {
   private ws: WebSocket | null = null;
   private options: Required<RdtConnectionOptions>;
   private state: ConnectionState = "disconnected";
-  private eventListeners: Partial<RdtConnectionEvents> = {};
+  private eventListeners: Map<
+    keyof RdtConnectionEvents,
+    Set<(...args: any[]) => void>
+  > = new Map();
   private reconnectAttempts = 0;
   private reconnectTimer: number | null = null;
   private subscriptions = new Set<string>();
@@ -161,14 +164,30 @@ export class RdtConnection {
     event: K,
     listener: RdtConnectionEvents[K],
   ): void {
-    this.eventListeners[event] = listener;
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+    this.eventListeners.get(event)!.add(listener as (...args: any[]) => void);
   }
 
   /**
    * Remove event listener
    */
-  off<K extends keyof RdtConnectionEvents>(event: K): void {
-    delete this.eventListeners[event];
+  off<K extends keyof RdtConnectionEvents>(
+    event: K,
+    listener?: RdtConnectionEvents[K],
+  ): void {
+    const listeners = this.eventListeners.get(event);
+    if (!listeners) {
+      return;
+    }
+
+    if (listener) {
+      listeners.delete(listener as (...args: any[]) => void);
+    } else {
+      // If no specific listener provided, remove all listeners for this event
+      listeners.clear();
+    }
   }
 
   /**
@@ -226,10 +245,15 @@ export class RdtConnection {
     event: K,
     ...args: Parameters<RdtConnectionEvents[K]>
   ): void {
-    const listener = this.eventListeners[event];
-    if (listener) {
-      // @ts-ignore - TypeScript can't infer the correct overload
-      listener(...args);
+    const listeners = this.eventListeners.get(event);
+    if (listeners && listeners.size > 0) {
+      listeners.forEach((listener) => {
+        try {
+          listener(...args);
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error);
+        }
+      });
     }
   }
 

@@ -1,0 +1,3 @@
+{
+  "typescript.tsdk": "./rdtjs/node_modules/typescript/lib"
+}

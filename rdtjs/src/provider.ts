@@ -30,9 +30,15 @@ export interface RdtStore<T = JsonValue> {
   getState: () => RdtStoreState<T>;
   setState: (partial: Partial<RdtStoreState<T>>) => void;
   subscribe: (listener: (state: RdtStoreState<T>) => void) => () => void;
+  subscribeToChanges: (
+    callback: (changes: ChangeUnion<T>[]) => void,
+  ) => () => void;
+  subscribeToInitialState: (
+    callback: (data: DocumentMap<T>) => void,
+  ) => () => void;
 }
 
-interface RdtStoreState<T = JsonValue> {
+export interface RdtStoreState<T = JsonValue> {
   data: DocumentMap<T>;
   isLoading: boolean;
   error: string | null;
@@ -43,6 +49,18 @@ export class RdtProvider<T = JsonValue> {
   private config: RdtProviderConfig;
   private store: any;
   private subscriptionKey: string;
+  private changeListeners: Set<(changes: ChangeUnion<T>[]) => void> = new Set();
+  private initialStateListeners: Set<(data: DocumentMap<T>) => void> =
+    new Set();
+
+  // Store references to event listeners for proper cleanup
+  private eventListeners?: {
+    fullState: (message: FullStateMessage) => void;
+    mapChange: (message: MapChangeMessage) => void;
+    batchMapChange: (message: BatchMapChangeMessage) => void;
+    error: (error: Error) => void;
+    stateChange: (state: any) => void;
+  };
 
   constructor(connection: RdtConnection, config: RdtProviderConfig) {
     this.connection = connection;
@@ -92,6 +110,12 @@ export class RdtProvider<T = JsonValue> {
           "Direct mutations are not allowed. State is managed by the server.",
         );
       },
+      subscribeToChanges: (callback: (changes: ChangeUnion<T>[]) => void) => {
+        return this.subscribeToChanges(callback);
+      },
+      subscribeToInitialState: (callback: (data: DocumentMap<T>) => void) => {
+        return this.subscribeToInitialState(callback);
+      },
     };
   }
 
@@ -116,53 +140,103 @@ export class RdtProvider<T = JsonValue> {
   }
 
   /**
+   * Subscribe to changes (insert, update, remove operations)
+   */
+  subscribeToChanges(
+    callback: (changes: ChangeUnion<T>[]) => void,
+  ): () => void {
+    this.changeListeners.add(callback);
+
+    // Return unsubscribe function
+    return () => {
+      this.changeListeners.delete(callback);
+    };
+  }
+
+  /**
+   * Subscribe to initial state loading (when fullState is received)
+   */
+  subscribeToInitialState(
+    callback: (data: DocumentMap<T>) => void,
+  ): () => void {
+    this.initialStateListeners.add(callback);
+
+    // Return unsubscribe function
+    return () => {
+      this.initialStateListeners.delete(callback);
+    };
+  }
+
+  /**
    * Destroy the provider and clean up resources
    */
   destroy(): void {
     this.connection.unsubscribe(this.config.documentId, this.config.mapKey);
-    this.connection.off("fullState");
-    this.connection.off("mapChange");
-    this.connection.off("batchMapChange");
-    this.connection.off("error");
+
+    // Remove specific event listeners
+    if (this.eventListeners) {
+      this.connection.off("fullState", this.eventListeners.fullState);
+      this.connection.off("mapChange", this.eventListeners.mapChange);
+      this.connection.off("batchMapChange", this.eventListeners.batchMapChange);
+      this.connection.off("error", this.eventListeners.error);
+      this.connection.off("stateChange", this.eventListeners.stateChange);
+    }
   }
 
   private setupEventListeners(): void {
-    this.connection.on("fullState", (message: FullStateMessage) => {
-      if (this.isMessageForThisProvider(message.document_id, message.map_key)) {
-        this.handleFullState(message as FullStateMessage<T>);
-      }
-    });
-
-    this.connection.on("mapChange", (message: MapChangeMessage) => {
-      if (this.isMessageForThisProvider(message.document_id, message.map_key)) {
-        this.handleMapChange(message as MapChangeMessage<T>);
-      }
-    });
-
-    this.connection.on("batchMapChange", (message: BatchMapChangeMessage) => {
-      if (this.isMessageForThisProvider(message.document_id, message.map_key)) {
-        this.handleBatchMapChange(message as BatchMapChangeMessage<T>);
-      }
-    });
-
-    this.connection.on("error", (error: Error) => {
-      this.store.setState({ error: error.message });
-    });
-
-    this.connection.on("stateChange", (state) => {
-      if (state === "connected") {
-        // Re-subscribe when connection is restored
-        this.connection.subscribe(this.config.documentId, this.config.mapKey);
-        if (this.config.options?.initialSync !== false) {
-          this.connection.getFullState(
-            this.config.documentId,
-            this.config.mapKey,
-          );
+    // Create bound methods to store as references
+    this.eventListeners = {
+      fullState: (message: FullStateMessage) => {
+        if (
+          this.isMessageForThisProvider(message.document_id, message.map_key)
+        ) {
+          this.handleFullState(message as FullStateMessage<T>);
         }
-      } else if (state === "disconnected" || state === "error") {
-        this.store.setState({ isLoading: true });
-      }
-    });
+      },
+
+      mapChange: (message: MapChangeMessage) => {
+        if (
+          this.isMessageForThisProvider(message.document_id, message.map_key)
+        ) {
+          this.handleMapChange(message as MapChangeMessage<T>);
+        }
+      },
+
+      batchMapChange: (message: BatchMapChangeMessage) => {
+        if (
+          this.isMessageForThisProvider(message.document_id, message.map_key)
+        ) {
+          this.handleBatchMapChange(message as BatchMapChangeMessage<T>);
+        }
+      },
+
+      error: (error: Error) => {
+        console.error("Error in RDT provider:", error);
+        this.store.setState({ error: error.message });
+      },
+
+      stateChange: (state) => {
+        if (state === "connected") {
+          // Re-subscribe when connection is restored
+          this.connection.subscribe(this.config.documentId, this.config.mapKey);
+          if (this.config.options?.initialSync !== false) {
+            this.connection.getFullState(
+              this.config.documentId,
+              this.config.mapKey,
+            );
+          }
+        } else if (state === "disconnected" || state === "error") {
+          this.store.setState({ isLoading: true });
+        }
+      },
+    };
+
+    // Register the event listeners
+    this.connection.on("fullState", this.eventListeners.fullState);
+    this.connection.on("mapChange", this.eventListeners.mapChange);
+    this.connection.on("batchMapChange", this.eventListeners.batchMapChange);
+    this.connection.on("error", this.eventListeners.error);
+    this.connection.on("stateChange", this.eventListeners.stateChange);
   }
 
   private async initialize(): Promise<void> {
@@ -178,6 +252,9 @@ export class RdtProvider<T = JsonValue> {
   }
 
   private handleFullState(message: FullStateMessage<T>): void {
+    // Notify initial state listeners
+    this.notifyInitialStateListeners(message.data);
+
     this.store.setState({
       data: message.data,
       isLoading: false,
@@ -188,6 +265,9 @@ export class RdtProvider<T = JsonValue> {
   private handleMapChange(message: MapChangeMessage<T>): void {
     const change = message.change as ChangeUnion<T>;
     const currentData = this.store.getState().data;
+
+    // Notify change listeners with array of changes (single change in this case)
+    this.notifyChangeListeners([change]);
 
     switch (change.op) {
       case "Insert": {
@@ -225,6 +305,9 @@ export class RdtProvider<T = JsonValue> {
   private handleBatchMapChange(message: BatchMapChangeMessage<T>): void {
     const currentData = this.store.getState().data;
     let newData = { ...currentData };
+
+    // Notify change listeners with array of changes
+    this.notifyChangeListeners(message.changes as ChangeUnion<T>[]);
 
     // Apply each change sequentially to build the final state
     for (const change of message.changes) {
@@ -271,6 +354,26 @@ export class RdtProvider<T = JsonValue> {
     return (
       documentId === this.config.documentId && mapKey === this.config.mapKey
     );
+  }
+
+  private notifyChangeListeners(changes: ChangeUnion<T>[]): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener(changes);
+      } catch (error) {
+        console.error("Error in change listener:", error);
+      }
+    }
+  }
+
+  private notifyInitialStateListeners(data: DocumentMap<T>): void {
+    for (const listener of this.initialStateListeners) {
+      try {
+        listener(data);
+      } catch (error) {
+        console.error("Error in initial state listener:", error);
+      }
+    }
   }
 }
 

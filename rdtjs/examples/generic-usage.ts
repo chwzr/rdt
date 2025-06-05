@@ -1,4 +1,4 @@
-import { RdtConnection, createRdtProvider } from "../src";
+import { RdtClient } from "../src";
 
 // Custom types for demonstration
 interface User {
@@ -15,19 +15,20 @@ interface Product {
   inStock: boolean;
 }
 
-// Example usage with custom types
+// Example usage with custom types using RdtClient
 async function exampleUsage() {
-  const connection = new RdtConnection({ url: "ws://localhost:8080" });
-  await connection.connect();
+  // Create and connect the RDT client
+  const client = new RdtClient({ url: "ws://localhost:8080" });
+  await client.connect();
 
   // Create a provider for User objects
-  const userProvider = createRdtProvider<User>(connection, {
+  const userProvider = client.createProvider<User>({
     documentId: "my-app",
     mapKey: "users",
   });
 
   // Create a provider for Product objects
-  const productProvider = createRdtProvider<Product>(connection, {
+  const productProvider = client.createProvider<Product>({
     documentId: "my-app",
     mapKey: "products",
   });
@@ -61,15 +62,19 @@ async function exampleUsage() {
 
   console.log("User store size:", userStore.size());
   console.log("Product store size:", productStore.size());
+
+  // Cleanup when done
+  client.disconnect();
 }
 
 // Example with JsonValue (backward compatibility)
 async function legacyUsage() {
-  const connection = new RdtConnection({ url: "ws://localhost:8080" });
-  await connection.connect();
+  // Create and connect the RDT client
+  const client = new RdtClient({ url: "ws://localhost:8080" });
+  await client.connect();
 
   // No generic parameter defaults to JsonValue
-  const legacyProvider = createRdtProvider(connection, {
+  const legacyProvider = client.createProvider({
     documentId: "legacy-app",
     mapKey: "data",
   });
@@ -79,6 +84,67 @@ async function legacyUsage() {
   // Works with any JsonValue
   const value = store.get("key"); // Returns JsonValue | undefined
   const allValues = store.values(); // Returns JsonValue[]
+
+  // Cleanup when done
+  client.disconnect();
 }
 
-export { exampleUsage, legacyUsage };
+// Example with multiple document types
+async function multiDocumentUsage() {
+  const client = new RdtClient({
+    url: "ws://localhost:8080",
+    reconnectInterval: 3000,
+    maxReconnectAttempts: 5,
+  });
+
+  await client.connect();
+
+  // Different document types in the same client
+  const gameUsersProvider = client.createProvider<User>({
+    documentId: "game-session-1",
+    mapKey: "players",
+  });
+
+  const chatMessagesProvider = client.createProvider<{
+    message: string;
+    userId: number;
+    timestamp: number;
+  }>({
+    documentId: "game-session-1",
+    mapKey: "chat",
+  });
+
+  const inventoryProvider = client.createProvider<Product>({
+    documentId: "game-session-1",
+    mapKey: "inventory",
+  });
+
+  // All providers share the same connection but manage different data
+  console.log("Connection state:", client.getConnectionState());
+
+  // Subscribe to all providers
+  gameUsersProvider.subscribe((state) => {
+    console.log(
+      "Players updated:",
+      Object.keys(state.data).length,
+      "players online",
+    );
+  });
+
+  chatMessagesProvider.subscribe((state) => {
+    console.log(
+      "New chat messages:",
+      Object.keys(state.data).length,
+      "messages",
+    );
+  });
+
+  inventoryProvider.subscribe((state) => {
+    console.log("Inventory updated:", Object.keys(state.data).length, "items");
+  });
+
+  // Cleanup - this will clean up all providers automatically
+  client.disconnect();
+}
+
+export { exampleUsage, legacyUsage, multiDocumentUsage };
