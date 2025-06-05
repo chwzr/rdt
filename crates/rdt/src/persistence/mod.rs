@@ -36,39 +36,17 @@ impl PersistenceManager {
     pub async fn start(&mut self) -> crate::RdtResult<()> {
         // Ensure storage directory exists
         tokio::fs::create_dir_all(&self.storage_path).await?;
+        // Start the main persistence loop
+        let store = self.store.clone();
+        let storage_path = self.storage_path.clone();
+        let check_interval = self.check_interval.clone();
 
         info!(
             "Starting persistence manager with storage path: {:?}",
             self.storage_path
         );
-
-        // Start the main persistence loop
-        let store = self.store.clone();
-        let storage_path = self.storage_path.clone();
-        let check_interval = self.check_interval;
-
-        self.handles.spawn(async move {
-            let mut interval = interval(check_interval);
-
-            loop {
-                interval.tick().await;
-
-                // Get all documents and check if they're dirty
-                let document_ids = store.list_documents();
-
-                for doc_id in document_ids {
-                    if let Some(doc_handle) = store.get_document(&doc_id) {
-                        if doc_handle.is_dirty() {
-                            if let Err(e) = persist_document(&doc_handle, &storage_path).await {
-                                error!("Failed to persist document '{}': {}", doc_id, e);
-                            } else {
-                                debug!("Persisted document '{}'", doc_id);
-                                doc_handle.mark_clean();
-                            }
-                        }
-                    }
-                }
-            }
+        tokio::spawn(async move {
+            inner_start(store, storage_path, check_interval).await;
         });
 
         Ok(())
@@ -137,6 +115,48 @@ impl PersistenceManager {
         }
 
         Ok(())
+    }
+}
+
+async fn inner_start(
+    store: Arc<DocumentStore>,
+    storage_path: PathBuf,
+    check_interval: Duration,
+) -> crate::RdtResult<()> {
+    loop {
+        let store = store.clone();
+        let storage_path = storage_path.clone();
+        let check_interval = check_interval.clone();
+
+        let handle = tokio::spawn(async move {
+            let result = async {
+                loop {
+                    tokio::time::sleep(check_interval).await;
+                    debug!("Checking for dirty documents");
+                    // Get all documents and check if they're dirty
+                    let document_ids = store.list_documents();
+
+                    for doc_id in document_ids {
+                        if let Some(doc_handle) = store.get_document(&doc_id) {
+                            if doc_handle.is_dirty() {
+                                debug!("Persisting document '{}'", doc_id);
+                                if let Err(e) = persist_document(&doc_handle, &storage_path).await {
+                                    error!("Failed to persist document '{}': {}", doc_id, e);
+                                } else {
+                                    debug!("Persisted document '{}'", doc_id);
+                                    doc_handle.mark_clean();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .await;
+
+            info!("Persistence manager task died unexpectedly: {:?}", result);
+        });
+
+        let _ = handle.await;
     }
 }
 
