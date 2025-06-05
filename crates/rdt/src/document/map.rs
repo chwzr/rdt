@@ -204,9 +204,86 @@ impl DocumentMap {
 
     /// Clear all key-value pairs from the map
     pub fn clear(&self) {
-        // We could broadcast individual Remove changes, but for performance
-        // we'll just clear and let subscribers re-sync
+        if self.data.is_empty() {
+            // Nothing to clear
+            return;
+        }
+
+        // Collect all existing keys and values before clearing
+        let existing_data: Vec<(String, JsonValue)> = self
+            .data
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+
+        // Clear the data
         self.data.clear();
+
+        if self.transaction_active.load(Ordering::Acquire) {
+            // Transaction is active - record all removals in transaction state
+            let mut changes = self.transaction_changes.lock().unwrap();
+
+            for (key, value) in existing_data {
+                let new_state = match changes.remove(&key) {
+                    Some(TransactionState::Inserted { .. }) => {
+                        // Key was inserted then removed in this transaction - net effect is nothing
+                        None // Don't insert anything, net effect is no change
+                    }
+                    Some(TransactionState::Updated { old_value, .. }) => {
+                        // Key was updated then removed - net effect is removal of original value
+                        Some(TransactionState::Removed { old_value })
+                    }
+                    Some(TransactionState::Removed { old_value }) => {
+                        // Already removed, keep the removal
+                        Some(TransactionState::Removed { old_value })
+                    }
+                    None => {
+                        // First change to this key in transaction is removal
+                        Some(TransactionState::Removed { old_value: value })
+                    }
+                };
+
+                if let Some(state) = new_state {
+                    changes.insert(key, state);
+                }
+            }
+        } else {
+            // No transaction - broadcast all removals as a batch
+            if !existing_data.is_empty() {
+                let changes: Vec<Change> = existing_data
+                    .into_iter()
+                    .map(|(key, old_value)| Change::Remove { key, old_value })
+                    .collect();
+
+                let changes_count = changes.len();
+                let message = (
+                    self.document_id.clone(),
+                    self.map_key.clone(),
+                    ChangeEvent::Batch(changes),
+                );
+
+                debug!(
+                    "Broadcasting batch clear changes for {} items in map '{}' in document '{}'",
+                    changes_count, self.map_key, self.document_id
+                );
+
+                match self.change_tx.send(message) {
+                    Ok(receiver_count) => {
+                        debug!(
+                            "Successfully sent clear batch to {} receivers for map '{}' in document '{}'",
+                            receiver_count, self.map_key, self.document_id
+                        );
+                    }
+                    Err(_) => {
+                        debug!(
+                            "No active receivers for clear changes to map '{}' in document '{}'",
+                            self.map_key, self.document_id
+                        );
+                    }
+                }
+            }
+        }
+
         debug!(
             "Cleared map '{}' in document '{}'",
             self.map_key, self.document_id
