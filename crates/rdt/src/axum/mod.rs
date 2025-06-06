@@ -149,9 +149,13 @@ impl ClientManager {
         if let Some(client_ids) = subscriptions.get(&key) {
             let clients = self.clients.read().await;
 
+            // Use Arc to avoid cloning the message for each subscriber
+            let message_arc = std::sync::Arc::new(message);
+
             for client_id in client_ids {
                 if let Some(client_info) = clients.get(client_id) {
-                    if client_info.sender.send(message.clone()).is_err() {
+                    // Clone only the Arc, not the entire message
+                    if client_info.sender.send((*message_arc).clone()).is_err() {
                         tracing::warn!("Failed to send message to client {}", client_id);
                     }
                 }

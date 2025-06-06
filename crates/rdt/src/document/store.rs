@@ -118,10 +118,11 @@ impl DocumentStore {
 
     /// List all document IDs
     pub fn list_documents(&self) -> Vec<String> {
+        let mut result = Vec::with_capacity(self.documents.len());
         self.documents
             .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+            .for_each(|entry| result.push(entry.key().clone()));
+        result
     }
 
     /// Get the number of documents

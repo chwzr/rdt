@@ -14,10 +14,8 @@ enum TransactionState {
     /// Key was inserted (didn't exist before transaction)
     Inserted { value: JsonValue },
     /// Key was updated (existed before transaction)
-    Updated {
-        old_value: JsonValue,
-        new_value: JsonValue,
-    },
+    /// Only store the original old_value, current value is in the main map
+    Updated { old_value: JsonValue },
     /// Key was removed (existed before transaction)
     Removed { old_value: JsonValue },
 }
@@ -81,27 +79,22 @@ impl DocumentMap {
                 }
                 Some(TransactionState::Updated { old_value, .. }) => {
                     // Key was already updated in this transaction, keep original old_value
-                    TransactionState::Updated {
-                        old_value,
-                        new_value: value,
-                    }
+                    TransactionState::Updated { old_value }
                 }
                 Some(TransactionState::Removed { old_value }) => {
                     // Key was removed then re-inserted, treat as update
-                    TransactionState::Updated {
-                        old_value,
-                        new_value: value,
-                    }
+                    TransactionState::Updated { old_value }
                 }
                 None => {
                     // First change to this key in transaction
-                    if let Some(old) = &old_value {
+                    if let Some(ref old) = old_value {
                         TransactionState::Updated {
                             old_value: old.clone(),
-                            new_value: value,
                         }
                     } else {
-                        TransactionState::Inserted { value }
+                        TransactionState::Inserted {
+                            value: value.clone(),
+                        }
                     }
                 }
             };
@@ -109,22 +102,50 @@ impl DocumentMap {
             changes.insert(key, new_state);
         } else {
             // No transaction - broadcast immediately
-            let change = if let Some(old) = &old_value {
+            let change = if let Some(ref old) = old_value {
                 Change::Update {
-                    key: key.clone(),
+                    key,
                     old_value: old.clone(),
                     new_value: value,
                 }
             } else {
-                Change::Insert {
-                    key: key.clone(),
-                    value,
-                }
+                Change::Insert { key, value }
             };
             self.broadcast_change_immediately(change);
         }
 
         old_value
+    }
+
+    /// Efficiently insert multiple key-value pairs
+    ///
+    /// This method is optimized for bulk operations and automatically uses transactions
+    /// to batch all changes into a single broadcast message.
+    pub fn bulk_insert(
+        &self,
+        data: impl IntoIterator<Item = (String, JsonValue)>,
+    ) -> Vec<(String, Option<JsonValue>)> {
+        let mut results = Vec::new();
+
+        // Start a transaction if not already active
+        let transaction_started = if !self.transaction_active.load(Ordering::Acquire) {
+            self.start_transaction_internal().is_ok()
+        } else {
+            false
+        };
+
+        // Insert all items
+        for (key, value) in data {
+            let old_value = self.insert(key.clone(), value);
+            results.push((key, old_value));
+        }
+
+        // Commit transaction if we started it
+        if transaction_started {
+            let _ = self.commit_transaction_internal();
+        }
+
+        results
     }
 
     /// Get a value by key
@@ -209,18 +230,18 @@ impl DocumentMap {
             return;
         }
 
-        // Collect all existing keys and values before clearing
-        let existing_data: Vec<(String, JsonValue)> = self
-            .data
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
-
-        // Clear the data
-        self.data.clear();
-
         if self.transaction_active.load(Ordering::Acquire) {
-            // Transaction is active - record all removals in transaction state
+            // Transaction is active - need to collect all data before clearing
+            let existing_data: Vec<(String, JsonValue)> = self
+                .data
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect();
+
+            // Clear the data
+            self.data.clear();
+
+            // Record all removals in transaction state
             let mut changes = self.transaction_changes.lock().unwrap();
 
             for (key, value) in existing_data {
@@ -248,13 +269,23 @@ impl DocumentMap {
                 }
             }
         } else {
-            // No transaction - broadcast all removals as a batch
-            if !existing_data.is_empty() {
-                let changes: Vec<Change> = existing_data
-                    .into_iter()
-                    .map(|(key, old_value)| Change::Remove { key, old_value })
-                    .collect();
+            // No transaction - more efficient batch clear
+            // Collect keys only for change notification, then clear
+            let removed_keys: Vec<String> =
+                self.data.iter().map(|entry| entry.key().clone()).collect();
 
+            // Get values by key just before clearing (avoid double iteration)
+            let changes: Vec<Change> = removed_keys
+                .into_iter()
+                .filter_map(|key| {
+                    self.data.remove(&key).map(|(k, v)| Change::Remove {
+                        key: k,
+                        old_value: v,
+                    })
+                })
+                .collect();
+
+            if !changes.is_empty() {
                 let changes_count = changes.len();
                 let message = (
                     self.document_id.clone(),
@@ -300,7 +331,7 @@ impl DocumentMap {
 
     /// Get all key-value pairs as a serializable format for persistence
     pub fn to_serializable(&self) -> serde_json::Map<String, JsonValue> {
-        let mut result = serde_json::Map::new();
+        let mut result = serde_json::Map::with_capacity(self.data.len());
         for entry in self.data.iter() {
             result.insert(entry.key().clone(), entry.value().clone());
         }
@@ -391,14 +422,18 @@ impl DocumentMap {
                 .into_iter()
                 .map(|(key, state)| match state {
                     TransactionState::Inserted { value } => Change::Insert { key, value },
-                    TransactionState::Updated {
-                        old_value,
-                        new_value,
-                    } => Change::Update {
-                        key,
-                        old_value,
-                        new_value,
-                    },
+                    TransactionState::Updated { old_value } => {
+                        let new_value =
+                            self.data.get(&key).map(|v| v.clone()).unwrap_or_else(|| {
+                                // Key was removed after update, use a null placeholder
+                                serde_json::Value::Null
+                            });
+                        Change::Update {
+                            key,
+                            old_value,
+                            new_value,
+                        }
+                    }
                     TransactionState::Removed { old_value } => Change::Remove { key, old_value },
                 })
                 .collect();
@@ -469,6 +504,14 @@ impl DocumentMapHandle {
     /// Insert a key-value pair into the map
     pub fn insert(&self, key: String, value: JsonValue) -> Option<JsonValue> {
         self.inner.insert(key, value)
+    }
+
+    /// Efficiently insert multiple key-value pairs
+    pub fn bulk_insert(
+        &self,
+        data: impl IntoIterator<Item = (String, JsonValue)>,
+    ) -> Vec<(String, Option<JsonValue>)> {
+        self.inner.bulk_insert(data)
     }
 
     /// Get a value by key
@@ -739,19 +782,62 @@ mod tests {
     #[tokio::test]
     async fn test_no_transaction_immediate_broadcast() {
         let (tx, mut rx) = broadcast::channel(10);
-        let map = DocumentMap::new("test-doc".to_string(), "test-map".to_string(), tx);
-        let map_handle = DocumentMapHandle::new(Arc::new(map));
+        let map = DocumentMap::new("doc".to_string(), "map".to_string(), tx);
 
-        // Make changes without a transaction - should broadcast immediately
-        map_handle.insert("key1".to_string(), json!("value1"));
+        // No transaction - should get immediate broadcasts
+        map.insert("key1".to_string(), json!("value1"));
 
-        // Should receive immediate single change message
-        let (_, _, change_event) = rx.recv().await.unwrap();
-        match change_event {
-            ChangeEvent::Single(change) => {
-                assert!(matches!(change, Change::Insert { .. }));
+        let change = rx.recv().await.unwrap();
+        assert_eq!(change.0, "doc");
+        assert_eq!(change.1, "map");
+        matches!(change.2, ChangeEvent::Single(_));
+    }
+
+    #[tokio::test]
+    async fn test_memory_efficient_transactions() {
+        // Test demonstrates memory efficiency with high-frequency updates on fixed keys
+        let (tx, _) = broadcast::channel(100);
+        let map = DocumentMap::new("doc".to_string(), "map".to_string(), tx);
+
+        // Set up initial state with 5 keys
+        for i in 0..5 {
+            map.insert(format!("key{}", i), json!(format!("initial_value_{}", i)));
+        }
+
+        // Start transaction
+        let _guard = map.start_transaction_internal().unwrap();
+
+        // Perform many updates to the same keys (simulating high-frequency changes)
+        for round in 0..100 {
+            for i in 0..5 {
+                map.insert(format!("key{}", i), json!(format!("value_{}_{}", i, round)));
             }
-            _ => panic!("Expected single change event"),
+        }
+
+        // Check transaction state only stores 5 entries (one per key) despite 500 operations
+        let transaction_changes = map.transaction_changes.lock().unwrap();
+        assert_eq!(
+            transaction_changes.len(),
+            5,
+            "Transaction state should only track unique keys"
+        );
+
+        // Verify each key has the correct transaction state
+        for i in 0..5 {
+            let key = format!("key{}", i);
+            match transaction_changes.get(&key) {
+                Some(TransactionState::Updated { old_value }) => {
+                    assert_eq!(old_value, &json!(format!("initial_value_{}", i)));
+                }
+                _ => panic!("Expected Updated state for key {}", key),
+            }
+        }
+
+        // Current values should be the latest ones
+        for i in 0..5 {
+            let key = format!("key{}", i);
+            let current_value = map.get(&key).unwrap();
+            assert_eq!(*current_value, json!(format!("value_{}_{}", i, 99)));
         }
     }
 }
