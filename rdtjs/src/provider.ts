@@ -172,15 +172,6 @@ export class RdtProvider<T = JsonValue> {
    */
   destroy(): void {
     this.connection.unsubscribe(this.config.documentId, this.config.mapKey);
-
-    // Remove specific event listeners
-    if (this.eventListeners) {
-      this.connection.off("fullState", this.eventListeners.fullState);
-      this.connection.off("mapChange", this.eventListeners.mapChange);
-      this.connection.off("batchMapChange", this.eventListeners.batchMapChange);
-      this.connection.off("error", this.eventListeners.error);
-      this.connection.off("stateChange", this.eventListeners.stateChange);
-    }
   }
 
   private setupEventListeners(): void {
