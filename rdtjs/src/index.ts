@@ -93,6 +93,20 @@ export class RdtClient {
   }
 
   /**
+   * Destroy a provider -  unsubscribe on the server and delete the provider from the client
+   */
+  destroyProvider(documentId: string, mapKey: string): void {
+    const key = `${documentId}:${mapKey}`;
+    const provider = this.providers.get(key);
+    if (provider) {
+      provider.destroy();
+      this.providers.delete(key);
+    } else {
+      throw new Error(`Could not destroy Provider, not found for key: ${key}`);
+    }
+  }
+
+  /**
    * Get a provider for a document map
    */
   getProvider<T = JsonValue>(key: string): RdtProvider<T> {
