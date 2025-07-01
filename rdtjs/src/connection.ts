@@ -40,6 +40,7 @@ export class RdtConnection {
     this.options = {
       reconnectInterval: 5000,
       maxReconnectAttempts: 10,
+      debug: false,
       ...options,
     };
   }
@@ -87,7 +88,7 @@ export class RdtConnection {
 
         this.ws.onerror = (error) => {
           this.setState("error");
-          console.log("WebSocket connection error:", error);
+          console.error("WebSocket connection error:", error);
           const err = new Error(
             `WebSocket connection failed - attempting to reconnect...`,
           );
@@ -124,7 +125,9 @@ export class RdtConnection {
     if (this.subscriptions.has(subscriptionKey)) {
       return;
     }
-    console.log("subscribing to", documentId, mapKey);
+    if (this.options.debug) {
+      console.log("subscribing to", documentId, mapKey);
+    }
     this.subscriptions.add(subscriptionKey);
 
     if (this.state === "connected") {
@@ -266,15 +269,19 @@ export class RdtConnection {
   }
 
   private resubscribeAll(): void {
-    console.log(
-      "Resubscribing to",
-      this.subscriptions.size,
-      "subscriptions after reconnect",
-    );
+    if (this.options.debug) {
+      console.log(
+        "Resubscribing to",
+        this.subscriptions.size,
+        "subscriptions after reconnect",
+      );
+    }
 
     this.subscriptions.forEach((subscriptionKey) => {
       const [documentId, mapKey] = subscriptionKey.split(":");
-      console.log("Resubscribing to", documentId, mapKey);
+      if (this.options.debug) {
+        console.log("Resubscribing to", documentId, mapKey);
+      }
       try {
         this.sendMessage({
           type: "Subscribe",
@@ -288,14 +295,18 @@ export class RdtConnection {
 
     // Request full state for all subscriptions after a small delay to ensure subscriptions are processed
     setTimeout(() => {
-      console.log(
-        "Requesting full state for",
-        this.subscriptions.size,
-        "subscriptions",
-      );
+      if (this.options.debug) {
+        console.log(
+          "Requesting full state for",
+          this.subscriptions.size,
+          "subscriptions",
+        );
+      }
       this.subscriptions.forEach((subscriptionKey) => {
         const [documentId, mapKey] = subscriptionKey.split(":");
-        console.log("Requesting full state for", documentId, mapKey);
+        if (this.options.debug) {
+          console.log("Requesting full state for", documentId, mapKey);
+        }
         try {
           this.sendMessage({
             type: "GetFullState",

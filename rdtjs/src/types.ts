@@ -111,6 +111,7 @@ export interface RdtConnectionOptions {
   url: string;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
+  debug?: boolean;
 }
 
 export interface SubscriptionOptions {
