@@ -62,7 +62,7 @@ impl PersistenceManager {
                             if let Err(e) = persist_document(&doc_handle, &storage_path).await {
                                 error!("Failed to persist document '{}': {}", doc_id, e);
                             } else {
-                                debug!("Persisted document '{}'", doc_id);
+                                info!("Persisted document '{}'", doc_id);
                                 doc_handle.mark_clean();
                             }
                         }

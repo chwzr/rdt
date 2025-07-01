@@ -69,7 +69,11 @@ impl Document {
 
     /// List all map keys in this document
     pub fn list_maps(&self) -> Vec<String> {
-        self.maps.iter().map(|entry| entry.key().clone()).collect()
+        let mut result = Vec::with_capacity(self.maps.len());
+        self.maps
+            .iter()
+            .for_each(|entry| result.push(entry.key().clone()));
+        result
     }
 
     /// Get the number of maps in this document
@@ -128,7 +132,7 @@ impl Document {
 
     /// Get all maps as a serializable format for persistence
     pub fn to_serializable(&self) -> serde_json::Map<String, serde_json::Value> {
-        let mut result = serde_json::Map::new();
+        let mut result = serde_json::Map::with_capacity(self.maps.len());
 
         for entry in self.maps.iter() {
             let map_data = entry.value().to_serializable();

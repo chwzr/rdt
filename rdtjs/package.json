@@ -1,6 +1,6 @@
 {
   "name": "rdtjs",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "description": "Client library for RDT (Realtime Document Synchronization) framework",
   "type": "module",
   "main": "dist/index.js",
