@@ -35,6 +35,8 @@ export class RdtConnection {
   private reconnectAttempts = 0;
   private reconnectTimer: number | null = null;
   private subscriptions = new Set<string>();
+  private connectResolve: (() => void) | null = null;
+  private connectReject: ((error: Error) => void) | null = null;
 
   constructor(options: RdtConnectionOptions) {
     this.options = {
@@ -56,52 +58,11 @@ export class RdtConnection {
     this.setState("connecting");
 
     return new Promise((resolve, reject) => {
-      try {
-        this.ws = new WebSocket(this.options.url);
-        this.ws.binaryType = "arraybuffer";
+      // Store resolve/reject for the initial connect call
+      this.connectResolve = resolve;
+      this.connectReject = reject;
 
-        this.ws.onopen = () => {
-          this.setState("connected");
-          this.reconnectAttempts = 0;
-          this.clearReconnectTimer();
-
-          // Re-subscribe to all stored subscriptions on reconnect
-          this.resubscribeAll();
-
-          resolve();
-        };
-
-        this.ws.onmessage = (event) => {
-          try {
-            const data = new Uint8Array(event.data);
-            const message = decodeServerMessage(data);
-            this.handleServerMessage(message);
-          } catch (error) {
-            this.emit("error", new Error(`Failed to decode message: ${error}`));
-          }
-        };
-
-        this.ws.onclose = () => {
-          this.setState("disconnected");
-          this.scheduleReconnect();
-        };
-
-        this.ws.onerror = (error) => {
-          this.setState("error");
-          console.error("WebSocket connection error:", error);
-          const err = new Error(
-            `WebSocket connection failed - attempting to reconnect...`,
-          );
-          this.emit("error", err);
-          this.scheduleReconnect();
-          reject(err);
-        };
-      } catch (error) {
-        this.setState("error");
-        const err = new Error(`Failed to create WebSocket: ${error}`);
-        this.emit("error", err);
-        reject(err);
-      }
+      this.attemptConnection();
     });
   }
 
@@ -326,10 +287,88 @@ export class RdtConnection {
   private scheduleReconnect(): void {
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectAttempts++;
-      this.connect().catch(() => {
-        // Connection failed, will schedule another attempt
-      });
+      this.setState("connecting");
+
+      // Attempt connection again
+      this.attemptConnection();
     }, this.options.reconnectInterval);
+  }
+
+  private attemptConnection(): void {
+    try {
+      this.ws = new WebSocket(this.options.url);
+      this.ws.binaryType = "arraybuffer";
+
+      this.ws.onopen = () => {
+        this.setState("connected");
+        this.reconnectAttempts = 0;
+        this.clearReconnectTimer();
+
+        // Re-subscribe to all stored subscriptions on reconnect
+        this.resubscribeAll();
+
+        // Resolve the connect promise if we have one
+        if (this.connectResolve) {
+          this.connectResolve();
+          this.connectResolve = null;
+          this.connectReject = null;
+        }
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const data = new Uint8Array(event.data);
+          const message = decodeServerMessage(data);
+          this.handleServerMessage(message);
+        } catch (error) {
+          this.emit("error", new Error(`Failed to decode message: ${error}`));
+        }
+      };
+
+      this.ws.onclose = () => {
+        this.setState("disconnected");
+        this.scheduleReconnect();
+      };
+
+      this.ws.onerror = (error) => {
+        this.setState("error");
+        console.error("WebSocket connection error:", error);
+        const err = new Error(
+          `WebSocket connection failed - attempting to reconnect...`,
+        );
+        this.emit("error", err);
+
+        // Check if we've exceeded max retry attempts
+        if (this.reconnectAttempts >= this.options.maxReconnectAttempts) {
+          const finalErr = new Error(
+            `Max reconnection attempts (${this.options.maxReconnectAttempts}) reached`,
+          );
+          this.emit("error", finalErr);
+
+          // Reject the connect promise if we have one
+          if (this.connectReject) {
+            this.connectReject(finalErr);
+            this.connectResolve = null;
+            this.connectReject = null;
+          }
+          return;
+        }
+
+        // Schedule retry
+        this.scheduleReconnect();
+      };
+    } catch (error) {
+      this.setState("error");
+      const err = new Error(`Failed to create WebSocket: ${error}`);
+      this.emit("error", err);
+
+      // Reject the connect promise if we have one
+      if (this.connectReject) {
+        this.connectReject(err);
+        this.connectResolve = null;
+        this.connectReject = null;
+      }
+    }
   }
 
   private clearReconnectTimer(): void {
