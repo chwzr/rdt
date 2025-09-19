@@ -1,4 +1,4 @@
-module.exports = {
+export default {
   preset: "ts-jest",
   testEnvironment: "jsdom",
   roots: ["<rootDir>/src"],
@@ -7,8 +7,7 @@ module.exports = {
     "^.+\\.ts$": "ts-jest",
   },
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts", "!src/examples/**"],
-  moduleNameMapping: {
+  moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
   },
-  setupFilesAfterEnv: ["<rootDir>/src/__tests__/setup.ts"],
 };
