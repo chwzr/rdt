@@ -37,6 +37,7 @@ export class RdtConnection {
   private subscriptions = new Set<string>();
   private connectResolve: (() => void) | null = null;
   private connectReject: ((error: Error) => void) | null = null;
+  private isReconnecting = false;
 
   constructor(options: RdtConnectionOptions) {
     this.options = {
@@ -285,9 +286,17 @@ export class RdtConnection {
   }
 
   private scheduleReconnect(): void {
+    // Prevent double reconnection if already scheduled
+    if (this.isReconnecting || this.reconnectTimer !== null) {
+      return;
+    }
+
+    this.isReconnecting = true;
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectAttempts++;
       this.setState("connecting");
+      this.isReconnecting = false;
+      this.reconnectTimer = null;
 
       // Attempt connection again
       this.attemptConnection();
@@ -327,7 +336,11 @@ export class RdtConnection {
 
       this.ws.onclose = () => {
         this.setState("disconnected");
-        this.scheduleReconnect();
+        // Only schedule reconnect if we're not already reconnecting
+        // This prevents double reconnection when both onclose and onerror fire
+        if (!this.isReconnecting && this.reconnectTimer === null) {
+          this.scheduleReconnect();
+        }
       };
 
       this.ws.onerror = (error) => {
@@ -354,7 +367,7 @@ export class RdtConnection {
           return;
         }
 
-        // Schedule retry
+        // Schedule retry (scheduleReconnect will check for existing timers)
         this.scheduleReconnect();
       };
     } catch (error) {
@@ -376,5 +389,6 @@ export class RdtConnection {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.isReconnecting = false;
   }
 }
