@@ -79,4 +79,104 @@ describe("RdtConnection", () => {
       expect(connection.getState()).toBe("connected");
     });
   });
+
+  describe("retry functionality", () => {
+    it("should succeed on second attempt after first failure", async () => {
+      const reconnectInterval = 50;
+
+      connection = new RdtConnection({
+        url: "ws://localhost:1234",
+        reconnectInterval: reconnectInterval,
+      });
+
+      const stateChangeSpy = jest.fn();
+      const errorSpy = jest.fn();
+      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation();
+      connection.on("stateChange", stateChangeSpy);
+      connection.on("error", errorSpy);
+
+      // Mock WebSocket to fail first time, succeed second time
+      const originalWebSocket = global.WebSocket;
+      let attemptCount = 0;
+      let wsInstance: any;
+
+      const MockWebSocket = jest.fn().mockImplementation((url) => {
+        attemptCount++;
+        wsInstance = {
+          url,
+          binaryType: "arraybuffer",
+          onopen: null,
+          onclose: null,
+          onerror: null,
+          onmessage: null,
+          close: jest.fn(),
+          send: jest.fn(),
+        };
+
+        if (attemptCount === 1) {
+          // First attempt: simulate failure
+          setTimeout(() => {
+            if (wsInstance.onerror) {
+              wsInstance.onerror(new Error("Connection failed"));
+            }
+          }, 10);
+        } else {
+          // Second attempt: simulate success
+          setTimeout(() => {
+            if (wsInstance.onopen) {
+              wsInstance.onopen();
+            }
+          }, 10);
+        }
+
+        return wsInstance;
+      });
+
+      // Add WebSocket constants to the mock
+      (MockWebSocket as any).CONNECTING = 0;
+      (MockWebSocket as any).OPEN = 1;
+      (MockWebSocket as any).CLOSING = 2;
+      (MockWebSocket as any).CLOSED = 3;
+
+      global.WebSocket = MockWebSocket as any;
+
+      try {
+        // Single call to connect() - should eventually succeed after internal retry
+        const connectPromise = connection.connect();
+
+        // Wait for the first attempt to fail and retry to be scheduled
+        await new Promise((resolve) =>
+          setTimeout(resolve, reconnectInterval + 50),
+        );
+
+        // The connection should eventually succeed
+        await connectPromise;
+
+        // Verify the connection state
+        expect(connection.getState()).toBe("connected");
+
+        // Verify WebSocket was called twice (first attempt fails, second succeeds)
+        expect(global.WebSocket).toHaveBeenCalledTimes(2);
+
+        // Verify state transitions
+        expect(stateChangeSpy).toHaveBeenCalledWith("connecting");
+        expect(stateChangeSpy).toHaveBeenCalledWith("error");
+        expect(stateChangeSpy).toHaveBeenCalledWith("connecting");
+        expect(stateChangeSpy).toHaveBeenCalledWith("connected");
+
+        // Verify error was emitted for the first failure
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+
+        // Verify console.error was called for the connection failure
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          "WebSocket connection error:",
+          expect.any(Error),
+        );
+      } finally {
+        // Restore original WebSocket and console.error
+        global.WebSocket = originalWebSocket;
+        consoleErrorSpy.mockRestore();
+      }
+    });
+  });
 });
