@@ -6,6 +6,11 @@ export default {
   transform: {
     "^.+\\.ts$": "ts-jest",
   },
+  globals: {
+    "ts-jest": {
+      tsconfig: "tsconfig.test.json",
+    },
+  },
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts", "!src/examples/**"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
