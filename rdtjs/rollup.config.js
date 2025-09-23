@@ -11,7 +11,7 @@ const config = [
       format: "es",
       sourcemap: true,
     },
-    plugins: [resolve(), typescript({ tsconfig: "./tsconfig.json" })],
+    plugins: [resolve(), typescript({ tsconfig: "./tsconfig.lib.json" })],
     external: ["zustand", "lib0", "react"],
   },
   // CommonJS build
@@ -22,7 +22,7 @@ const config = [
       format: "cjs",
       sourcemap: true,
     },
-    plugins: [resolve(), typescript({ tsconfig: "./tsconfig.json" })],
+    plugins: [resolve(), typescript({ tsconfig: "./tsconfig.lib.json" })],
     external: ["zustand", "lib0", "react"],
   },
   // Type definitions
